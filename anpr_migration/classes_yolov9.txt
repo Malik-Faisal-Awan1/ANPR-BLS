@@ -1,5 +1,0 @@
-0:license
-1:car
-2:bike
-3:rickshaw
-4:truck
