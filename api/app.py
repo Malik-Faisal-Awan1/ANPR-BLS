@@ -27,24 +27,6 @@ logger = logging.getLogger(__name__)
 detector = None
 ocr_engine = None
 
-# ── SSE event broadcaster ─────────────────────────────────────────────────────
-# Each connected /api/events client registers an asyncio.Queue here.
-_sse_subscribers: list[asyncio.Queue] = []
-_sse_lock = threading.Lock()
-
-
-def _broadcast_event(payload: dict) -> None:
-    """Push a plate-read event to all SSE subscribers (thread-safe)."""
-    with _sse_lock:
-        dead = []
-        for q in _sse_subscribers:
-            try:
-                q.put_nowait(payload)
-            except asyncio.QueueFull:
-                dead.append(q)
-        for q in dead:
-            _sse_subscribers.remove(q)
-
 
 class UploadTooLargeError(ValueError):
     pass
@@ -203,13 +185,15 @@ def process_single_frame(frame, img_name):
         cropped_plate = frame[crop_y1:crop_y2, crop_x1:crop_x2]
 
         plate_number = ""
+        vehicle_type = det.get('vehicle_type', 'unknown')
 
         crop_metadata.append({
             "idx": idx,
             "det": det,
             "x1": x1, "y1": y1, "x2": x2, "y2": y2,
             "cropped_plate": cropped_plate,
-            "plate_number": plate_number
+            "plate_number": plate_number,
+            "vehicle_type": vehicle_type
         })
 
     # Run batch OCR on all crops
@@ -231,6 +215,7 @@ def process_single_frame(frame, img_name):
     for meta in crop_metadata:
         det = meta["det"]
         plate_number = meta["plate_number"]
+        vehicle_type = meta["vehicle_type"]
         x1, y1, x2, y2 = meta["x1"], meta["y1"], meta["x2"], meta["y2"]
         conf = det['conf']
         idx = meta["idx"]
@@ -238,7 +223,7 @@ def process_single_frame(frame, img_name):
 
         if plate_number:
             plate_found_in_frame = True
-            detected_texts.append(plate_number)
+            detected_texts.append({"plate": plate_number, "vehicle": vehicle_type, "conf": float(conf)})
 
             if config.SAVE_CROPPED_PLATES:
                 crop_name = f"crop_candidate_{os.path.splitext(img_name)[0]}_{idx}.jpg"
@@ -280,31 +265,20 @@ def process_single_frame(frame, img_name):
 
     elapsed_time_ms = (time.time() - start_time) * 1000
     execution_time = round(elapsed_time_ms, 2)
-    plates_found = ", ".join(detected_texts) if detected_texts else "NONE"
+    
+    plates_log = ", ".join([f"{d['plate']} ({d['vehicle']})" for d in detected_texts]) if detected_texts else "NONE"
 
     logger.info(
         f"[CORE ENGINE] File: {img_name} | Found: {plate_found_in_frame} | "
-        f"Plates: {plates_found} | Speed: {execution_time} ms"
+        f"Plates: {plates_log} | Speed: {execution_time} ms"
     )
 
     result = {
         "success": plate_found_in_frame,
-        "numberplate": plates_found,
+        "detections": detected_texts,
         "processed_image_path": output_path,
         "execution_time_ms": execution_time
     }
-
-    # Broadcast to SSE subscribers
-    _broadcast_event({
-        "id": str(uuid.uuid4()),
-        "cameraId": "watcher",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "plateNumber": plates_found if plate_found_in_frame else None,
-        "confidence": float(sorted_detections[0]['conf']) if plate_found_in_frame and sorted_detections else 0.0,
-        "success": plate_found_in_frame,
-        "processingMs": execution_time,
-        "imagePath": f"/output/{os.path.basename(output_path)}" if output_path else None,
-    })
 
     return result
 
@@ -349,7 +323,7 @@ def cleanup_old_files(directory, max_age_seconds=86400, max_files=1000):
         logger.error(f"Error cleaning up directory {directory}: {e}")
 
 
-def watch_directory():
+def watch_directory(stop_event: threading.Event):
     input_dir = config.INPUT_IMAGE_PATH
     failed_dir = getattr(config, 'FAILED_DIR', os.path.join(os.path.dirname(input_dir), "failed"))
     
@@ -362,7 +336,7 @@ def watch_directory():
     
     last_cleanup_time = 0.0
     
-    while True:
+    while not stop_event.is_set():
         try:
             now = time.time()
             if now - last_cleanup_time > 3600:
@@ -414,8 +388,10 @@ def watch_directory():
                 logger.info(f"--- Watcher: Processing single image: {img_name} ---")
                 try:
                     result = process_single_frame_with_timeout(frame, img_name, getattr(config, "API_PROCESS_LOCK_TIMEOUT_SECONDS", 0), False)
-                    if result["success"]:
-                        logger.info(f"\n[WATCHER SUCCESS] Plate found in {img_name} -> {result['numberplate']}")
+                    if result.get("success"):
+                        detections = result.get("detections", [])
+                        plates_log = ", ".join([f"{d.get('plate', 'UNKNOWN')} ({d.get('vehicle', 'unknown')})" for d in detections])
+                        logger.info(f"\n[WATCHER SUCCESS] Plate found in {img_name} -> {plates_log}")
                         if getattr(config, "DELETE_PROCESSED_IMAGES", True):
                             try:
                                 os.remove(img_path)
@@ -434,21 +410,34 @@ def watch_directory():
                         os.replace(img_path, os.path.join(failed_dir, img_name))
                     except:
                         pass
+                
+                # Proactive GC hint
+                del frame
 
         except Exception as e:
             logger.error(f"Error in watcher loop: {e}")
             time.sleep(1.0)
+            
+    logger.info("Watcher thread stopped cleanly.")
 
 
 # Lifespan context manager for FastAPI startup and shutdown events
+stop_event = threading.Event()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize models
     init_models()
     logger.info("Starting directory watcher thread...")
-    watcher_thread = threading.Thread(target=watch_directory, daemon=True)
+    watcher_thread = threading.Thread(target=watch_directory, args=(stop_event,), daemon=True)
     watcher_thread.start()
+    
     yield
+    
+    # Shutdown
+    logger.info("Shutting down directory watcher...")
+    stop_event.set()
+    watcher_thread.join(timeout=3.0)
 
 
 # Initialize FastAPI app with lifespan handler
@@ -514,7 +503,7 @@ async def api_process(file: UploadFile = File(...)):
         
         # API execution log inside terminal
         logger.info(
-            f"--- API RESPONSE: Processed {img_name} | Plate: {result['numberplate']} | "
+            f"--- API RESPONSE: Processed {img_name} | Detections: {len(result['detections'])} | "
             f"Speed: {result['execution_time_ms']} ms ---"
         )
         return JSONResponse(status_code=status.HTTP_200_OK, content=result)
@@ -557,62 +546,6 @@ async def api_status():
             'failed_directory': failed_dir
         }
     )
-
-
-@app.get("/api/cameras")
-async def api_cameras():
-    """Return a static camera list. Extend this when real camera management is added."""
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
-            "cameras": [
-                {
-                    "id": "watcher",
-                    "name": "Directory Watcher",
-                    "location": config.INPUT_IMAGE_PATH,
-                    "status": "online",
-                }
-            ]
-        },
-    )
-
-
-@app.get("/api/events")
-async def api_events():
-    """SSE stream — pushes PlateReadEvent JSON to connected Dashboard clients."""
-    queue: asyncio.Queue = asyncio.Queue(maxsize=50)
-    with _sse_lock:
-        _sse_subscribers.append(queue)
-
-    async def event_generator():
-        try:
-            # Send a heartbeat immediately so EventSource sees the connection
-            yield "event: ping\ndata: {}\n\n"
-            while True:
-                try:
-                    payload = await asyncio.wait_for(queue.get(), timeout=25.0)
-                    yield f"data: {json.dumps(payload)}\n\n"
-                except asyncio.TimeoutError:
-                    # Keepalive comment so the connection stays alive through proxies
-                    yield ": keepalive\n\n"
-        except asyncio.CancelledError:
-            pass
-        finally:
-            with _sse_lock:
-                try:
-                    _sse_subscribers.remove(queue)
-                except ValueError:
-                    pass
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
 
 def run_server():
     import uvicorn

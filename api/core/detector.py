@@ -111,56 +111,38 @@ class PlateDetector:
         return padded, scale, (new_w, new_h), (pad_x, pad_y)
     
     def _postprocess(self, output: np.ndarray, scale: float, orig_shape: tuple, pad: tuple) -> List[Dict[str, Any]]:
-        """Post-process YOLOv9 raw output."""
-        # Output shape: [1, 9, anchors] -> [9, anchors]
-        # 9 channels = 4 bbox (cx, cy, w, h) + 5 class scores (sigmoid)
+        """Post-process YOLOv9 raw output for plates and vehicles."""
         out = output[0]
         
         cx, cy, w, h = out[0], out[1], out[2], out[3]
-        # Class scores (indices 4-8): license, car, bike, rickshaw, truck
-        cls_scores = out[4:9]  # Shape: [5, anchors]
+        cls_scores = out[4:9]  # 0: license, 1: car, 2: bike, 3: rickshaw, 4: truck
         
-        # Apply sigmoid to get class probabilities
         cls_probs = 1 / (1 + np.exp(-cls_scores))
+        max_class_probs = np.max(cls_probs, axis=0)
+        max_class_ids = np.argmax(cls_probs, axis=0)
         
-        # License plate class probability (class 0 = license)
-        license_prob = cls_probs[0]
-        
-        # Confidence = license plate class probability
-        conf = license_prob
-        
-        # Filter by confidence threshold and license plate class
-        mask = conf >= self.conf_threshold
+        mask = max_class_probs >= self.conf_threshold
         if not mask.any():
             return []
-        
-        # Get filtered detections
+            
         cx_f = cx[mask]
         cy_f = cy[mask]
         w_f = w[mask]
         h_f = h[mask]
-        conf_f = conf[mask]
+        conf_f = max_class_probs[mask]
+        cls_id_f = max_class_ids[mask]
         
-        # Convert cx,cy,w,h to x1,y1,x2,y2 (in model input space - padded 640x640)
         x1 = cx_f - w_f / 2
         y1 = cy_f - h_f / 2
         x2 = cx_f + w_f / 2
         y2 = cy_f + h_f / 2
         
-        # Remove padding offsets to get coordinates in resized image space
         pad_x, pad_y = pad
-        x1 = x1 - pad_x
-        y1 = y1 - pad_y
-        x2 = x2 - pad_x
-        y2 = y2 - pad_y
+        x1 = (x1 - pad_x) / scale
+        y1 = (y1 - pad_y) / scale
+        x2 = (x2 - pad_x) / scale
+        y2 = (y2 - pad_y) / scale
         
-        # Scale back to original image coordinates
-        x1 = x1 / scale
-        y1 = y1 / scale
-        x2 = x2 / scale
-        y2 = y2 / scale
-        
-        # Clip to image boundaries
         frame_h, frame_w = orig_shape
         x1 = np.clip(x1, 0, frame_w)
         y1 = np.clip(y1, 0, frame_h)
@@ -169,18 +151,52 @@ class PlateDetector:
         
         boxes = np.stack([x1, y1, x2, y2], axis=1)
         
-        # NMS
-        keep_idx = nms(boxes, conf_f, self.iou_threshold)
-        
         detections = []
-        for idx in keep_idx:
-            detections.append({
-                "bbox": [int(boxes[idx, 0]), int(boxes[idx, 1]), int(boxes[idx, 2]), int(boxes[idx, 3])],
-                "conf": float(conf_f[idx]),
-                "class_id": self.license_class_id
-            })
+        # NMS per class
+        for cid in range(5):
+            c_mask = (cls_id_f == cid)
+            if not c_mask.any():
+                continue
+                
+            c_boxes = boxes[c_mask]
+            c_conf = conf_f[c_mask]
+            
+            keep_idx = nms(c_boxes, c_conf, self.iou_threshold)
+            
+            for idx in keep_idx:
+                detections.append({
+                    "bbox": [int(c_boxes[idx, 0]), int(c_boxes[idx, 1]), int(c_boxes[idx, 2]), int(c_boxes[idx, 3])],
+                    "conf": float(c_conf[idx]),
+                    "class_id": int(cid)
+                })
+                
+        # Separate plates and vehicles
+        plates = [d for d in detections if d["class_id"] == 0]
+        vehicles = [d for d in detections if d["class_id"] != 0]
+        vehicle_mapping = {1: "car", 2: "bike", 3: "rickshaw", 4: "truck"}
         
-        return detections
+        # Match plates to vehicles
+        for plate in plates:
+            px1, py1, px2, py2 = plate["bbox"]
+            best_vehicle = "unknown"
+            best_intersection = 0
+            
+            for v in vehicles:
+                vx1, vy1, vx2, vy2 = v["bbox"]
+                ix1 = max(px1, vx1)
+                iy1 = max(py1, vy1)
+                ix2 = min(px2, vx2)
+                iy2 = min(py2, vy2)
+                
+                if ix1 < ix2 and iy1 < iy2:
+                    inter_area = (ix2 - ix1) * (iy2 - iy1)
+                    if inter_area > best_intersection:
+                        best_intersection = inter_area
+                        best_vehicle = vehicle_mapping.get(v["class_id"], "unknown")
+            
+            plate["vehicle_type"] = best_vehicle
+            
+        return plates
     
     def detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Detect license plates in a single frame."""
