@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+venv_312/
+ENV/
+env/
+.env
+.venv
+
+# Logs and databases
+*.log
+logs/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Build and distribution directories
+dist/
+build/
+*.egg-info/
+
+# Tauri/Frontend artifacts
+desktop-app/node_modules/
+desktop-app/dist/
+desktop-app/src-tauri/target/
+
+# Output / Data
+output/
+data/images/
+data/failed/
+
+# Graphify artifacts
+graphify-out/
+.graphifyignore
+
+# Ensure ONNX model weights are tracked
+!*.onnx
