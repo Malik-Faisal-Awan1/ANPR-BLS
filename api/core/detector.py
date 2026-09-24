@@ -1,6 +1,5 @@
 import logging
 import os
-import time
 from typing import List, Dict, Any
 
 import cv2
@@ -12,38 +11,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO if getattr(config, "VERBOSE_LOGGING", False) else logging.WARNING)
 
-
-def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> List[int]:
-    """Non-Maximum Suppression."""
-    if len(boxes) == 0:
-        return []
-    
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
-    
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        
-        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
-        order = order[1:][iou <= iou_threshold]
-    
-    return keep
 
 
 class PlateDetector:
@@ -152,7 +119,7 @@ class PlateDetector:
         boxes = np.stack([x1, y1, x2, y2], axis=1)
         
         detections = []
-        # NMS per class
+        # NMS per class using OpenCV's native C++ implementation
         for cid in range(5):
             c_mask = (cls_id_f == cid)
             if not c_mask.any():
@@ -161,7 +128,12 @@ class PlateDetector:
             c_boxes = boxes[c_mask]
             c_conf = conf_f[c_mask]
             
-            keep_idx = nms(c_boxes, c_conf, self.iou_threshold)
+            # cv2.dnn.NMSBoxes expects [x, y, w, h] format and float lists
+            xywh = [[float(b[0]), float(b[1]), float(b[2]-b[0]), float(b[3]-b[1])] for b in c_boxes]
+            keep_idx = cv2.dnn.NMSBoxes(xywh, c_conf.tolist(), self.conf_threshold, self.iou_threshold)
+            if len(keep_idx) == 0:
+                continue
+            keep_idx = keep_idx.flatten()
             
             for idx in keep_idx:
                 detections.append({

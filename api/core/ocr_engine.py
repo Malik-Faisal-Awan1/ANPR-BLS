@@ -5,58 +5,40 @@ import onnxruntime as ort
 import config
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO if getattr(config, "VERBOSE_LOGGING", False) else logging.WARNING)
 
 _CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
-_MODEL_PATH = "models/fast-plate/best.onnx"
 
 
 class TextExtractor:
-    """OCR engine backed directly by the fast-plate ONNX model (CCT)."""
+    """CCT OCR engine backed by fast-plate ONNX model."""
 
-    def __init__(self, lang="en"):
+    def __init__(self, **_):
         available = ort.get_available_providers()
         providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in available]
-        self.session = ort.InferenceSession(_MODEL_PATH, providers=providers)
+        self.session = ort.InferenceSession(config.OCR_MODEL_PATH, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
-        logger.info("fast-plate ONNX engine loaded: %s", _MODEL_PATH)
+        logger.info("OCR model loaded: %s", config.OCR_MODEL_PATH)
 
-    # ── internal ──────────────────────────────────────────────────────────────
+    def _preprocess(self, bgr: np.ndarray) -> np.ndarray:
+        """BGR → uint8 RGB 128×64 NHWC."""
+        return cv2.cvtColor(cv2.resize(bgr, (128, 64)), cv2.COLOR_BGR2RGB)[np.newaxis]
 
-    def _preprocess(self, bgr_img: np.ndarray) -> np.ndarray:
-        """BGR → uint8 RGB, resized to 128×64 (W×H), NHWC."""
-        rgb = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-        rgb = cv2.resize(rgb, (128, 64))          # (H=64, W=128, C=3)
-        return rgb[np.newaxis]                     # (1, 64, 128, 3) uint8
-
-    def _decode(self, logits: np.ndarray) -> str:
-        """logits shape: (B, 10, 37) → list[str]."""
-        indices = np.argmax(logits, axis=-1)       # (B, 10)
+    def _decode(self, logits: np.ndarray) -> list[str]:
         return [
-            "".join(_CHARSET[i] for i in row).replace("_", "")
-            for row in indices
+            "".join(_CHARSET[i] for i in np.argmax(logits[b], axis=-1)).replace("_", "")
+            for b in range(logits.shape[0])
         ]
 
-    def _run(self, plate_imgs: list[np.ndarray]) -> list[str]:
-        batch = np.concatenate([self._preprocess(img) for img in plate_imgs]) # (B,64,128,3)
-        logits = self.session.run(None, {self.input_name: batch})[0]           # (B,10,37)
-        return self._decode(logits)
+    def _run(self, imgs: list[np.ndarray]) -> list[str]:
+        batch = np.concatenate([self._preprocess(img) for img in imgs])
+        return self._decode(self.session.run(None, {self.input_name: batch})[0])
 
-    # ── public API ────────────────────────────────────────────────────────────
+    def extract_text(self, img: np.ndarray, **_) -> str:
+        return self._run([img])[0] if img is not None and img.size else ""
 
-    def extract_text(self, plate_img: np.ndarray, **_) -> str:
-        if plate_img is None or plate_img.size == 0:
-            return ""
-        text = self._run([plate_img])[0]
-        if text:
-            logger.info("OCR result: %s", text)
-        return text
+    def extract_texts(self, imgs: list[np.ndarray], **_) -> list[str]:
+        return self._run(imgs) if imgs else []
 
-    def extract_texts(self, plate_imgs: list[np.ndarray], **_) -> list[str]:
-        if not plate_imgs:
-            return []
-        return self._run(plate_imgs)
-
-    # aliases kept for call-site compatibility
+    # aliases
     extract_plate = extract_text
     extract_plate_texts = extract_texts
