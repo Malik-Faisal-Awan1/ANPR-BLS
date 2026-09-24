@@ -43,8 +43,8 @@ desktop-app/src-tauri/target/
 
 # Output / Data
 output/
-data/images/
-data/failed/
+data/
+train_data/
 
 # Graphify artifacts
 graphify-out/
