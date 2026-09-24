@@ -18,37 +18,36 @@ logs/
 # IDEs and Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
 # OS generated files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-Desktop.ini
 
 # Build and distribution directories
 dist/
 build/
 *.egg-info/
 
-# Tauri/Frontend artifacts
-desktop-app/node_modules/
-desktop-app/dist/
-desktop-app/src-tauri/target/
-
 # Output / Data
-output/
+api/output/
+api/data/
 data/
 train_data/
+
+# Model Tracking
+# Ignore all models by default...
+*.pt
+*.onnx
+# ...except the production weights
+!api/models/best.pt
+!api/models/fast-plate/best.onnx
 
 # Graphify artifacts
 graphify-out/
 .graphifyignore
 
-# Ensure ONNX model weights are tracked
-!*.onnx
+# outdated context markdown files
+colab_train_fast_plate_ocr_v2.md
+colab_train_fast_plate_ocr_v3.md
+Technical Handoff Specification.md
+Technical Handoff Specification (v4).md

@@ -1,3 +1,0 @@
-@echo off
-echo Starting Python sidecar stub...
-python "%~dp0stub_backend.py" %*
