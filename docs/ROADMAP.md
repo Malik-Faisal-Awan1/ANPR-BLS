@@ -35,7 +35,8 @@ Detection latency must not block delivery reliability. Network/printer outages m
 
 **Below-confidence routing**
 - **OCR Confidence Definition:** The minimum over all non-pad slots of the maximum per-slot probability.
-- Reads where this OCR confidence is below ~0.30 (based on prototype) are NOT written to the outbox for auto-delivery. Route them to a human-review queue instead. Do not print uncertain reads automatically.
+- Reads where this OCR confidence is below `TODO: decide from labeled data` are NOT written to the outbox for auto-delivery. Route them to a human-review queue instead. Do not print uncertain reads automatically.
+- **Note:** At 0.30, a known wrong read (0.3047) would pass. Confidence is not calibrated, and confident misreads (e.g. 0/O, 8/B) still need format validation.
 - **Explicit rule:** Detector confidence (`config.CONFIDENCE_THRESHOLD`) must NOT gate printing. It is only used to decide if a plate exists in the image.
 
 **Delivery process (separate from API/watcher)**
