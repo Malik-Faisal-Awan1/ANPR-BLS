@@ -15,7 +15,9 @@ class TextExtractor:
     def __init__(self, **_):
         available = ort.get_available_providers()
         providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in available]
-        self.session = ort.InferenceSession(config.OCR_MODEL_PATH, providers=providers)
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = config.OCR_INTRA_OP_THREADS
+        self.session = ort.InferenceSession(config.OCR_MODEL_PATH, sess_options=so, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
         logger.info("OCR model loaded: %s", config.OCR_MODEL_PATH)
 
@@ -24,8 +26,9 @@ class TextExtractor:
         return cv2.cvtColor(cv2.resize(bgr, (128, 64)), cv2.COLOR_BGR2RGB)[np.newaxis]
 
     def _decode(self, logits: np.ndarray) -> list[str]:
+        # rstrip only: CCT pads trailing slots with '_'; mid-string '_' never occurs in valid output.
         return [
-            "".join(_CHARSET[i] for i in np.argmax(logits[b], axis=-1)).replace("_", "")
+            "".join(_CHARSET[i] for i in np.argmax(logits[b], axis=-1)).rstrip("_")
             for b in range(logits.shape[0])
         ]
 
