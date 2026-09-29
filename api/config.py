@@ -47,6 +47,7 @@ API_MAX_IMAGE_PIXELS = int(os.environ.get("ANPR_MAX_IMAGE_PIXELS", str(25_000_00
 API_UPLOAD_READ_CHUNK_BYTES = int(os.environ.get("ANPR_UPLOAD_READ_CHUNK_BYTES", str(1024 * 1024)))
 
 # ── OCR ───────────────────────────────────────────────────────────────────────
+# Tuned on one machine at batch 5; benchmark before changing.
 OCR_INTRA_OP_THREADS = min(2, os.cpu_count() or 2)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
