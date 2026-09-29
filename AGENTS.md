@@ -94,7 +94,8 @@ python test_pipeline.py path/to/plate.jpg
 - **YOLO raw output is `[batch, 9, N_anchors]`**: indices `[4:9]` are raw class logits; sigmoid is applied manually in `_postprocess`. Not standard Ultralytics postprocessing format.
 - **`watcher.py` skips files prefixed `result_`, `crop_`, `failed_`** to avoid re-processing its own outputs.
 - **numpy pin updated to `>=2.4.6`** in requirements.txt. Verified: numpy 2.4.6 passes all three entry points and `pip check` shows no numpy conflicts.
-- **`config.OCR_INTRA_OP_THREADS`** is wired into `SessionOptions.intra_op_num_threads` in `TextExtractor.__init__`. Change thread count in config.py only.
+- **`config.OCR_INTRA_OP_THREADS`** is wired into `SessionOptions.intra_op_num_threads` in `TextExtractor.__init__`. Change thread count in config.py only. (Tuned at 2 threads on one machine at batch 5; benchmark before changing.)
+- **`_preprocess` uses letterbox (black padding)**: crop is scaled to fit 128x64 while preserving aspect ratio; black strips fill the remainder. Do NOT revert to plain resize -- square/two-line plates were distorted without this.
 - **6% horizontal + 4% vertical bbox expansion** is applied before cropping in both `_run_inference` in `app.py` and `process` in `watcher.py`. Keep both in sync if changed.
 - **`_decode` uses `rstrip("_")`**: CCT pads trailing slots with `_`; mid-string `_` does not occur in valid model output.
 
@@ -126,7 +127,7 @@ python test_pipeline.py path/to/plate.jpg
 > **Status: NOT implemented.** Never reference outbox tables, adapters, or correction storage as if they exist.
 > Full design spec: `docs/ROADMAP.md`.
 
-**Behavior:** Mention once per session, one sentence, attributed to maintainers, only when a trigger matches below.
+**Behavior:** Mention once per session, one sentence, attributed to maintainers, only when a trigger matches below. Before designing any outbox/correction schema, read docs/ROADMAP.md and follow it.
 > Skip if the user declines. If the user chooses a different approach, follow the user.
 > Avoid changes that make the upgrade harder (e.g. hard-wiring printing into `watcher.py`), but never block the user's request.
 
