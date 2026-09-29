@@ -323,3 +323,14 @@ class PlateDetector:
         y_norm = max(0.0, min(1.0, y_center / float(frame_h)))
         y_weight = 0.25 + 0.75 * y_norm
         return float(area * y_weight)
+
+    @staticmethod
+    def crop_detection(frame: np.ndarray, bbox: list, expand: bool = True) -> np.ndarray:
+        x1, y1, x2, y2 = bbox
+        if expand:
+            bw, bh = x2 - x1, y2 - y1
+            x1 = max(0, x1 - int(bw * 0.06))
+            x2 = min(frame.shape[1], x2 + int(bw * 0.06))
+            y1 = max(0, y1 - int(bh * 0.04))
+            y2 = min(frame.shape[0], y2 + int(bh * 0.04))
+        return frame[y1:y2, x1:x2]

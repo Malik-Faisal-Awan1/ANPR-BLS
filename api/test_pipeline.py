@@ -171,7 +171,7 @@ if not detections:
 print("\nSTEP 5 - Crop best detection")
 best = detections[0]
 x1, y1, x2, y2 = best["bbox"]
-crop = frame[y1:y2, x1:x2]
+crop = PlateDetector.crop_detection(frame, best["bbox"], expand=True)
 if crop.size == 0:
     print(f"  [FAIL] Crop is empty for bbox {best['bbox']} on frame {frame.shape}")
     sys.exit(1)

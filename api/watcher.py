@@ -53,17 +53,11 @@ def process(frame, img_name: str, detector, ocr_engine) -> dict:
     for det in sorted(detections, key=lambda d: d["conf"], reverse=True):
         if det["conf"] < config.CONFIDENCE_THRESHOLD:
             continue
-        x1, y1, x2, y2 = det["bbox"]
-        bw = x2 - x1
-        x1 = max(0, x1 - int(bw * 0.06))
-        x2 = min(frame.shape[1], x2 + int(bw * 0.06))
-        y1 = max(0, y1 - int((y2 - y1) * 0.04))
-        y2 = min(frame.shape[0], y2 + int((y2 - y1) * 0.04))
-        crop = frame[y1:y2, x1:x2]
+        crop = PlateDetector.crop_detection(frame, det["bbox"], expand=True)
         if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
             continue
         crops.append(crop)
-        crop_meta.append({"det": det, "box": (x1, y1, x2, y2), "crop": crop})
+        crop_meta.append({"det": det, "box": det["bbox"], "crop": crop})
 
     texts = ocr_engine.extract_plate_texts(crops) if crops else []
     results = []
