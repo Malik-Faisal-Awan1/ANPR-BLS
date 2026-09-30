@@ -70,10 +70,6 @@ def _validate_image_bytes(contents: bytes) -> None:
         raise InvalidImageError(f"Image too large: {w}x{h}")
 
 
-def _validate_frame(frame: np.ndarray) -> None:
-    h, w = frame.shape[:2]
-    if w * h > config.API_MAX_IMAGE_PIXELS:
-        raise InvalidImageError(f"Image too large: {w}x{h}")
 
 
 def _run_inference(frame: np.ndarray, img_name: str) -> dict:
@@ -157,7 +153,6 @@ async def api_process(file: UploadFile = File(...)):
         frame = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             return JSONResponse(status.HTTP_400_BAD_REQUEST, {"success": False, "error": "Cannot decode image"})
-        _validate_frame(frame)
         img_name = _unique_name(file.filename)
         result = await asyncio.get_running_loop().run_in_executor(None, _run_inference, frame, img_name)
         logger.info("Processed %s | %d detection(s) | %.1f ms", img_name, len(result["detections"]), result["execution_time_ms"])

@@ -249,11 +249,11 @@ class PlateDetector:
             return []
         
         frame_h, frame_w = frame_shape
-        top_ignore = getattr(config, "ROI_TOP_IGNORE_RATIO", 0.12)
-        bottom_ignore = getattr(config, "ROI_BOTTOM_IGNORE_RATIO", 0.05)
-        min_area = getattr(config, "MIN_PLATE_AREA", 200)
-        min_w = getattr(config, "MIN_PLATE_WIDTH", 15)
-        min_h = getattr(config, "MIN_PLATE_HEIGHT", 10)
+        top_ignore = config.ROI_TOP_IGNORE_RATIO
+        bottom_ignore = config.ROI_BOTTOM_IGNORE_RATIO
+        min_area = config.MIN_PLATE_AREA
+        min_w = config.MIN_PLATE_WIDTH
+        min_h = config.MIN_PLATE_HEIGHT
         
         filtered = []
         for det in detections:
@@ -302,12 +302,12 @@ class PlateDetector:
         
         keep.sort(key=lambda d: d.get("fg_score", 0.0), reverse=True)
         
-        if getattr(config, "ENABLE_FOREGROUND_FILTERING", True) and keep:
-            if getattr(config, "SELECT_PRIMARY_FOREGROUND_ONLY", True):
+        if config.ENABLE_FOREGROUND_FILTERING and keep:
+            if config.SELECT_PRIMARY_FOREGROUND_ONLY:
                 keep = [keep[0]]
             else:
                 primary_area = keep[0]["area"]
-                cutoff_ratio = getattr(config, "FOREGROUND_AREA_RATIO_CUTOFF", 0.25)
+                cutoff_ratio = config.FOREGROUND_AREA_RATIO_CUTOFF
                 min_keep_area = primary_area * cutoff_ratio
                 keep = [d for d in keep if d["area"] >= min_keep_area]
         

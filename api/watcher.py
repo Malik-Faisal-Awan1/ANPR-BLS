@@ -143,7 +143,7 @@ def process(frame, img_name: str, detector, ocr_engine) -> dict:
 def run():
     input_dir = config.INPUT_IMAGE_PATH
     output_dir = config.OUTPUT_DIR
-    failed_dir = os.path.join(os.path.dirname(input_dir), "failed")
+    failed_dir = config.FAILED_DIR
 
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
@@ -216,8 +216,7 @@ def run():
                         pending_set.add(img_path)
                         cleanup_queue.put((img_path, dest))
                     finally:
-                        if 'frame' in locals():
-                            del frame
+                        del frame
 
             except KeyboardInterrupt:
                 raise

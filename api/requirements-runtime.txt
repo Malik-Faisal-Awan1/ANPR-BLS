@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+onnxruntime
+opencv-python
+numpy>=2.4.6,<3
+pillow
+python-multipart
