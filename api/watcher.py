@@ -4,6 +4,9 @@ import glob
 import logging
 import time
 import sys
+import threading
+import queue
+import uuid
 
 # Allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
@@ -42,6 +45,56 @@ def _cleanup(directory, max_age_seconds=86400, max_files=1000):
                 pass
     except Exception as e:
         logger.error("Cleanup error in %s: %s", directory, e)
+
+
+class PendingSet:
+    def __init__(self):
+        self._set = set()
+        self._lock = threading.Lock()
+
+    def add(self, path):
+        with self._lock:
+            self._set.add(os.path.abspath(path))
+
+    def remove(self, path):
+        with self._lock:
+            self._set.discard(os.path.abspath(path))
+
+    def __contains__(self, path):
+        with self._lock:
+            return os.path.abspath(path) in self._set
+
+
+def io_worker(q, pending_set):
+    while True:
+        item = q.get()
+        if item is None:
+            q.task_done()
+            break
+        src_path, dest_path = item
+        
+        success = False
+        for _ in range(5):
+            try:
+                if dest_path is None:
+                    os.remove(src_path)
+                else:
+                    safe_dest = dest_path
+                    if os.path.exists(safe_dest):
+                        base, ext = os.path.splitext(safe_dest)
+                        safe_dest = f"{base}_{uuid.uuid4().hex[:8]}{ext}"
+                    os.replace(src_path, safe_dest)
+                success = True
+                break
+            except OSError:
+                time.sleep(0.1)
+        
+        if not success:
+            logger.error("IO Worker failed: operation=%s, path=%s, dest=%s", 
+                         "remove" if dest_path is None else "replace", src_path, dest_path)
+        
+        pending_set.remove(src_path)
+        q.task_done()
 
 
 def process(frame, img_name: str, detector, ocr_engine) -> dict:
@@ -101,75 +154,83 @@ def run():
     ocr_engine = TextExtractor()
     logger.info("Watcher ready. Monitoring: %s", input_dir)
 
+    pending_set = PendingSet()
+    cleanup_queue = queue.Queue(maxsize=256)
+    worker_thread = threading.Thread(target=io_worker, args=(cleanup_queue, pending_set))
+    worker_thread.start()
+
     last_cleanup = 0.0
-    while True:
-        try:
-            now = time.time()
-            if now - last_cleanup > 3600:
-                _cleanup(output_dir)
-                _cleanup(failed_dir)
-                last_cleanup = now
+    try:
+        while True:
+            try:
+                now = time.time()
+                if now - last_cleanup > 3600:
+                    _cleanup(output_dir)
+                    _cleanup(failed_dir)
+                    last_cleanup = now
 
-            seen, paths = set(), []
-            for ext in ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"):
-                for p in glob.glob(os.path.join(input_dir, ext)):
-                    norm = os.path.normcase(os.path.abspath(p))
-                    if norm not in seen:
-                        seen.add(norm)
-                        paths.append(p)
+                seen, paths = set(), []
+                for ext in ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"):
+                    for p in glob.glob(os.path.join(input_dir, ext)):
+                        norm = os.path.normcase(os.path.abspath(p))
+                        if norm not in seen:
+                            seen.add(norm)
+                            paths.append(p)
 
-            if not paths:
-                time.sleep(0.1)
-                continue
-
-            for img_path in sorted(paths):
-                if not os.path.exists(img_path):
-                    continue
-                img_name = os.path.basename(img_path)
-                if img_name.startswith(("result_", "crop_", "failed_")):
+                if not paths:
+                    time.sleep(0.1)
                     continue
 
-                frame = cv2.imread(img_path)
-                if frame is None:
-                    logger.warning("Unreadable image, moving to failed: %s", img_name)
+                for img_path in sorted(paths):
+                    if img_path in pending_set:
+                        continue
+                    if not os.path.exists(img_path):
+                        continue
+                    img_name = os.path.basename(img_path)
+                    if img_name.startswith(("result_", "crop_", "failed_")):
+                        continue
+
+                    frame = cv2.imread(img_path)
+                    if frame is None:
+                        logger.warning("Unreadable image, moving to failed: %s", img_name)
+                        dest = os.path.join(failed_dir, img_name)
+                        pending_set.add(img_path)
+                        cleanup_queue.put((img_path, dest))
+                        continue
+
+                    logger.info("Processing: %s", img_name)
                     try:
-                        os.replace(img_path, os.path.join(failed_dir, img_name))
-                    except OSError:
-                        pass
-                    continue
+                        result = process(frame, img_name, detector, ocr_engine)
+                        if result["success"]:
+                            plates = ", ".join(f"{d['plate']} ({d['vehicle']})" for d in result["detections"])
+                            logger.info("[SUCCESS] %s -> %s", img_name, plates)
+                        else:
+                            logger.info("[NO PLATE] %s", img_name)
+                        if config.DELETE_PROCESSED_IMAGES:
+                            dest = None if result["success"] else os.path.join(failed_dir, img_name)
+                            pending_set.add(img_path)
+                            cleanup_queue.put((img_path, dest))
+                    except Exception as e:
+                        logger.error("Error processing %s: %s", img_name, e)
+                        dest = os.path.join(failed_dir, img_name)
+                        pending_set.add(img_path)
+                        cleanup_queue.put((img_path, dest))
+                    finally:
+                        if 'frame' in locals():
+                            del frame
 
-                logger.info("Processing: %s", img_name)
-                try:
-                    result = process(frame, img_name, detector, ocr_engine)
-                    if result["success"]:
-                        plates = ", ".join(f"{d['plate']} ({d['vehicle']})" for d in result["detections"])
-                        logger.info("[SUCCESS] %s -> %s", img_name, plates)
-                    else:
-                        logger.info("[NO PLATE] %s", img_name)
-                    if config.DELETE_PROCESSED_IMAGES:
-                        dest = None if result["success"] else os.path.join(failed_dir, img_name)
-                        try:
-                            if dest:
-                                os.replace(img_path, dest)
-                            else:
-                                os.remove(img_path)
-                        except OSError:
-                            pass
-                except Exception as e:
-                    logger.error("Error processing %s: %s", img_name, e)
-                    try:
-                        os.replace(img_path, os.path.join(failed_dir, img_name))
-                    except OSError:
-                        pass
-                finally:
-                    del frame
-
-        except KeyboardInterrupt:
-            logger.info("Watcher stopped.")
-            break
-        except Exception as e:
-            logger.error("Watcher loop error: %s", e)
-            time.sleep(1.0)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                logger.error("Watcher loop error: %s", e)
+                time.sleep(1.0)
+    except KeyboardInterrupt:
+        logger.info("Watcher stopped. Draining I/O queue...")
+    finally:
+        cleanup_queue.put(None)
+        cleanup_queue.join()
+        worker_thread.join()
+        logger.info("I/O queue drained and worker stopped.")
 
 
 if __name__ == "__main__":
