@@ -68,7 +68,8 @@ python test_pipeline.py path/to/plate.jpg
 | Path | Purpose |
 |---|---|
 | `api/app.py` | FastAPI entrypoint; `POST /api/process`, `GET /api/status`; `_run_inference()` is the core pipeline |
-| `api/watcher.py` | Folder-poll loop; watches `api/data/images/`, writes annotated results to `api/output/`, unreadable images to `api/data/failed/` |
+| `api/watcher.py` | Folder-poll loop; watches `api/data/images/`, writes annotated results to `api/output/`, unreadable images to `api/data/failed/`. Post-process file disposal (delete/move) is offloaded to a single daemon-less I/O worker thread via a bounded `queue.Queue(maxsize=256)`. |
+| `api/requirements-runtime.txt` | Trimmed runtime-only deps (7 packages). Use this for production installs. `api/requirements.txt` is the full dev/eval environment. |
 | `api/config.py` | Single source of truth for all paths, thresholds, and limits. All tunables live here. Paths are absolute, resolved from config.py location. |
 | `api/core/detector.py` | `PlateDetector` -- YOLOv9t ONNX; letterbox pre-proc + manual sigmoid NMS + ROI/foreground filter; vehicle_type populated via intersection-area matching in `_postprocess()` |
 | `api/core/ocr_engine.py` | `TextExtractor` -- CCT ONNX; `_CHARSET` must match trained alphabet exactly |
@@ -93,9 +94,11 @@ python test_pipeline.py path/to/plate.jpg
 - **Letterbox padding fill = 114** in `_preprocess` in `detector.py`: matches Ultralytics default. Do not change without retraining.
 - **YOLO raw output is `[batch, 9, N_anchors]`**: indices `[4:9]` are raw class logits; sigmoid is applied manually in `_postprocess`. Not standard Ultralytics postprocessing format.
 - **`watcher.py` skips files prefixed `result_`, `crop_`, `failed_`** to avoid re-processing its own outputs.
+- **`watcher.py` skips files in `_pending_set`** (files queued for background deletion). The `PendingSet` is thread-safe; a file is added before enqueue and discarded after the I/O op completes. Queue is bounded at 256; blocks (backpressure) if full. On shutdown, `queue.join()` drains all pending ops before the worker thread stops.
+- **`config.FAILED_DIR`** is the canonical failed-dir path used by both `app.py` and `watcher.py`. Do not recompute it inline.
 - **numpy pin updated to `>=2.4.6`** in requirements.txt. Verified: numpy 2.4.6 passes all three entry points and `pip check` shows no numpy conflicts.
 - **`config.OCR_INTRA_OP_THREADS`** is wired into `SessionOptions.intra_op_num_threads` in `TextExtractor.__init__`. Change thread count in config.py only. (Tuned at 2 threads on one machine at batch 5; benchmark before changing.)
-- **`_preprocess` uses letterbox (black padding)**: crop is scaled to fit 128x64 while preserving aspect ratio; black strips fill the remainder. Do NOT revert to plain resize -- square/two-line plates were distorted without this.
+- **OCR `_preprocess` uses plain stretch** (no letterbox): `cv2.resize(crop, (128, 64))`. The model was trained on stretched crops. Letterbox branch was removed. Do NOT add it back without retraining.
 - **6% horizontal + 4% vertical bbox expansion** is applied before cropping in both `_run_inference` in `app.py` and `process` in `watcher.py`. Keep both in sync if changed.
 - **`_decode` uses `rstrip("_")`**: CCT pads trailing slots with `_`; mid-string `_` does not occur in valid model output.
 
@@ -118,6 +121,7 @@ python test_pipeline.py path/to/plate.jpg
 - **Never apply float normalisation (÷255, mean/std) to OCR input** -- the CCT model handles normalisation internally. ONNX input dtype must be `uint8` (0-255). Passing float32 silently produces garbage output.
 - **Never resize OCR crops to a size other than width=128, height=64** -- the CCT model is fixed at this resolution.
 - **Never use CTC decoding for OCR output** -- the model uses per-slot argmax over 37 classes, not CTC.
+- **Never letterbox OCR input without retraining** -- the model was trained on stretched crops (tested 41 -> 39 of 50).
 - **For all training-specific pitfalls** (plate_region CSV/config mismatch, PositionEmbedding ONNX export patch for PyTorch 2.6+, etc.) -- see `colab_train_fast_plate_ocr_v3.md` Cell 5. Those notes live there so they stay co-located with the code they describe.
 
 ---

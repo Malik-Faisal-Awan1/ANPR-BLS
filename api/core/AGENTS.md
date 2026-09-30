@@ -12,7 +12,7 @@
 ## ocr_engine.py
 
 - `_CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"` (37 chars). Must stay byte-for-byte identical to the alphabet baked into `api/models/fast-plate/best.onnx`. Any mismatch silently corrupts all readings.
-- Input pipeline: BGR crop -> `cv2.resize(crop, (128, 64))` -> `cv2.cvtColor(BGR2RGB)` -> `[np.newaxis]` adds batch dim -> dtype stays `uint8`. No float conversion ever.
+- Input pipeline: BGR crop -> `cv2.resize(crop, (128, 64))` (plain stretch, no letterbox) -> `cv2.cvtColor(BGR2RGB)` -> `[np.newaxis]` adds batch dim -> dtype stays `uint8`. No float conversion ever.
 - `_decode` uses `rstrip("_")`: CCT pads trailing slots with `_`; mid-string `_` does not occur in valid model output, so we strip trailing `_` only (not all `_`). Verified by simulation.
 - `OCR_INTRA_OP_THREADS` from config.py is wired into `SessionOptions.intra_op_num_threads` in `__init__`. Verified accepted by onnxruntime.
 - Output shape from ONNX session: `[N, 10, 37]`. Decoded by argmax over axis=-1 per slot, then charset index lookup, then rstrip `_`.
