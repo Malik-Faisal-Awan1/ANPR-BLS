@@ -1,1 +1,0 @@
-fast plate fine tuned weights with .keras and .onnx format, training notebook for colab(fast_plate_ft.ipynb) and realted stuff
