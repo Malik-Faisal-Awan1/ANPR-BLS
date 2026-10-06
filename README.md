@@ -1,13 +1,65 @@
-# ANPR-BLS (Automatic Number Plate Recognition)
+<div align="center">
+
+# 🚗 ANPR-BLS
+
+**Automatic Number Plate Recognition, fast, lean and production-ready.**
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![YOLOv9](https://img.shields.io/badge/Detection-YOLOv9-00A8E8)
+![ONNX](https://img.shields.io/badge/OCR-ONNX%20Runtime-005CED?logo=onnx&logoColor=white)
+
+<br>
+
+<img width="850" alt="ANPR detection result" src="https://github.com/user-attachments/assets/50c1feab-adb5-4dd4-ae22-bac17e325166" />
+
+<sub>Plate detection and recognition on a high-resolution image</sub>
+
+</div>
+
+---
 
 An enterprise-grade, lean API for Automated Number Plate Recognition (ANPR). This repository contains the highly optimized production API for inference and the full developer environment for research, model training, and data preparation.
 
+## 📑 Contents
+
+- [Architecture Overview](#️-architecture-overview)
+- [Sample Results](#-sample-results)
+- [Monorepo Structure](#-monorepo-structure)
+- [Getting Started](#-getting-started-production--inference)
+- [Developer Guide](#-developer-guide-retraining--research)
+
+---
+
 ## 🏛️ Architecture Overview
+
 The system relies on a unified, two-stage inference pipeline:
+
 1. **Detection (YOLOv9)**: A highly accurate YOLOv9 model (`models/best.pt`) detects the bounding box of license plates in high-resolution images.
 2. **OCR / Recognition (Compact Convolutional Transformer - CCT)**: A lightweight, custom-trained CCT model (`models/fast-plate/best.onnx`) processes the cropped plate. It expects a strict tensor contract: a native `uint8` `[Batch, 64, 128, 3]` NHWC tensor, bypassing legacy normalization (no CLAHE, no float casting).
 
 Both models are served through a lean FastAPI backend.
+
+---
+
+## 📸 Sample Results
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/8afe7d6e-13e3-481d-b899-75cdd9b1ff50" alt="Result 2" width="100%" />
+      <br><sub><b>Sample 2</b></sub>
+    </td>
+    <td align="center">
+      <img src="https://github.com/user-attachments/assets/83f46b38-062c-41c9-ae5d-24d0be1c88d6" alt="Result 3" width="100%" />
+      <br><sub><b>Sample 3</b></sub>
+    </td>
+  </tr>
+</table>
+
+</div>
 
 ---
 
@@ -40,7 +92,9 @@ ANPR-BLS/
 The `api/` directory contains exactly what is needed for production. No GUI bloat, no heavy training libraries.
 
 ### 1. Installation
+
 Ensure you have Python 3.10+ installed.
+
 ```bash
 cd api/
 python -m venv venv
@@ -49,19 +103,26 @@ pip install -r requirements.txt
 ```
 
 ### 2. Run the API Server
+
 Start the lean FastAPI server:
+
 ```bash
 python app.py
 ```
-*The server binds to `0.0.0.0:5001` by default.*
+
+> The server binds to `0.0.0.0:5001` by default.
 
 ### 3. Usage
+
 You can test the pipeline using curl or Python:
+
 ```bash
 # Upload an image for processing
 curl -X POST -F "file=@sample_car.jpg" http://127.0.0.1:5001/api/process
 ```
+
 **Response Format:**
+
 ```json
 {
   "success": true,
@@ -77,7 +138,9 @@ curl -X POST -F "file=@sample_car.jpg" http://127.0.0.1:5001/api/process
 The `training/` environment preserves all context needed to adapt the system for new license plate formats, different camera angles, or domain-specific augmentations.
 
 ### 1. Dev Setup
+
 If you need to train models, you will need a separate, heavier environment containing PyTorch, Albumentations, and evaluation frameworks.
+
 ```bash
 cd training/
 # Install training requirements (assuming you maintain a dev_requirements.txt)
@@ -85,21 +148,29 @@ pip install torch torchvision albumentations wandb
 ```
 
 ### 2. Retraining the YOLO Detector
+
 To train a new YOLOv9 model for detection, update your dataset YAML and run:
+
 ```bash
 yolo task=detect mode=train data=plate_dataset.yaml model=yolov9c.pt epochs=100 imgsz=640
 ```
+
 Export the model to `.pt` or `.onnx` and place it in `api/models/`.
 
 ### 3. Retraining the Fast-Plate OCR (CCT)
+
 Our OCR engine uses a CCT. The dataset should consist of tight `128x64` crops of plates.
+
 1. Place training data crops in `training/data/`.
 2. Update configuration in `training/configs/`.
 3. Run the trainer:
-   ```bash
+```bash
    python train_onnx.py --config configs/fast_plate.yaml
-   ```
+```
 4. Export the resulting model to `best.onnx` and replace `api/models/fast-plate/best.onnx`.
 
 ### 4. Tensor Contract (Important)
-If you update the OCR model, ensure you do not break the API's tensor contract. The FastAPI `ocr_engine.py` currently sends the ONNX model a pure `uint8` BGR-to-RGB converted image, without float normalization. If your new training pipeline requires mean/std normalization, you must update the preprocessing step in `api/core/ocr_engine.py`.
+
+> ⚠️ If you update the OCR model, ensure you do not break the API's tensor contract.
+
+The FastAPI `ocr_engine.py` currently sends the ONNX model a pure `uint8` BGR-to-RGB converted image, without float normalization. If your new training pipeline requires mean/std normalization, you must update the preprocessing step in `api/core/ocr_engine.py`.
